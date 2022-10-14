@@ -4,92 +4,53 @@
    This file is part of emapp component and it's licensed under Mozilla Public License. see LICENSE.md for more details.
  */
 
-#import <IOKit/pwr_mgt/IOPMLib.h>
-#import <QuartzCore/CVDisplayLink.h>
+#pragma once
+#ifndef NANOEM_EMAPP_WIN32_MAINWINDOW_H_
+#define NANOEM_EMAPP_WIN32_MAINWINDOW_H_
 
-#import "CocoaApplicationMenuBuilder.h"
-#import "MenuItemCollection.h"
+#include <Windows.h>
+#include <dxgi.h>
+#include <shellapi.h>
 
+#include "Win32ApplicationMenuBuilder.h"
 #include "emapp/BaseApplicationService.h"
 #include "emapp/IFileManager.h"
 
-#include "bx/os.h" /* bx::sleep */
-#include <atomic>
+#include "bx/os.h"
 
-@class NSApplication;
-@class NSCursor;
-@class NSEvent;
-@class NSOpenPanel;
-@class NSSavePanel;
-@class NSWindow;
-@class NSTextInputContext;
-@class WebView;
+struct IProgressDialog;
+struct ID3D12CommandQueue;
+struct ID3D12Device;
 
 namespace bx {
 class CommandLine;
-}
+} /* namespace bx */
+
 namespace nanoem {
 
-class ITranslator;
 class ThreadedApplicationClient;
-class ThreadedApplicationService;
 
-namespace macos {
+namespace win32 {
 
-class CocoaThreadedApplicationService;
+class Dialog;
 class Preference;
+class Win32ThreadedApplicationService;
 
-class MainWindow : private NonCopyable {
+class MainWindow final {
 public:
-    MainWindow(const bx::CommandLine *cmd, CocoaThreadedApplicationService *service, ThreadedApplicationClient *client,
-        NSWindow *nativeWindow, Preference *preference);
+    MainWindow(const bx::CommandLine *cmd, const Preference *preference,
+        win32::Win32ThreadedApplicationService *service, ThreadedApplicationClient *client, HINSTANCE hInstance,
+        const Vector4UI32 &rect, nanoem_f32_t devicePixelRatio);
     ~MainWindow();
 
-    void initialize();
-    void processMessage(NSApplication *app);
-    void terminate();
-
-    const ThreadedApplicationClient *client() const noexcept;
-    ThreadedApplicationClient *client() noexcept;
-    const ThreadedApplicationService *service() const noexcept;
-    ThreadedApplicationService *service() noexcept;
-    NSWindow *nativeWindow() noexcept;
-    NSAttributedString *attributedString();
-    NSRange selectedRange() const noexcept;
-    NSRange markedRange() const noexcept;
-    NSRect firstRectForCharacterRange();
+    bool initialize(HWND windowHandle, Error &error);
     bool isRunning() const noexcept;
-    bool hasMarkedText() const noexcept;
+    void processMessage(MSG *msg);
 
-    void handleAssignFocus();
-    void handleResignFocus();
-    void handleWindowResize();
-    void handleWindowChangeDevicePixelRatio();
-    void handleMouseDown(const NSEvent *event);
-    void handleMouseMoved(const NSEvent *event);
-    void handleMouseDragged(const NSEvent *event);
-    void handleMouseUp(const NSEvent *event);
-    void handleMouseExit(const NSEvent *event);
-    void handleRightMouseDown(const NSEvent *event);
-    void handleRightMouseDragged(const NSEvent *event);
-    void handleRightMouseUp(const NSEvent *event);
-    void handleOtherMouseDown(const NSEvent *event);
-    void handleOtherMouseDragged(const NSEvent *event);
-    void handleOtherMouseUp(const NSEvent *event);
-    void handleKeyDown(NSEvent *event);
-    void handleKeyUp(NSEvent *event);
-    void handleScrollWheel(const NSEvent *event);
-    void handleInsertText(id value);
-    void handleUnmarkText();
-    void handleSetMarkerText(id value, NSRange selectedRange);
-
-    void openProgressWindow(NSString *title, NSString *message, nanoem_u32_t total, bool cancellable);
-    void closeProgressWindow();
-    void confirmBeforeClose();
+    HWND windowHandle() noexcept;
+    HMENU menuHandle() noexcept;
     void clearTitle();
-    void setWindowDevicePixelRatio(float value);
-    void setTitle(NSURL *fileURL);
-    void setTitle(NSString *lastPathComponent);
+    void setTitle(const URI &fileURI);
 
 private:
     enum DisabledCursorState {
@@ -98,87 +59,150 @@ private:
         kDisabledCursorStateMoving,
     };
     struct FPSThresholder {
-        FPSThresholder(uint32_t value, bool enabled);
-        inline void
-        operator=(bool value)
+        FPSThresholder(uint32_t value, bool enabled)
+            : m_value(value)
+            , m_preferred(value)
+            , m_enabled(enabled)
         {
-            m_enabled = value;
         }
-        inline void
+        void
         operator=(uint32_t value)
         {
             m_value = value;
         }
-        void threshold(uint32_t displayFrequency);
+        void
+        threshold(uint32_t displayFrequency)
+        {
+            if (m_enabled) {
+                const uint32_t value = m_value > 0 ? m_value : m_preferred;
+                if (value > 0 && value < displayFrequency) {
+                    bx::sleep(uint32_t((1.0f / (value + 1)) * 1000.0f));
+                }
+            }
+        }
         uint32_t m_value;
         uint32_t m_preferred;
         bool m_enabled;
     };
-    typedef tinystl::unordered_map<String, nanoem_u16_t, TinySTLAllocator> FileHandleMap;
+    typedef tinystl::vector<nanoem_u16_t, TinySTLAllocator> HandleList;
+    typedef tinystl::unordered_map<String, tinystl::pair<HANDLE, HandleList>, TinySTLAllocator> FileHandleListMap;
 
-    static BaseApplicationService::KeyType translateKeyType(const NSEvent *event) noexcept;
+    static LRESULT CALLBACK handleWindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
+    static DWORD CALLBACK collectPerformanceMetricsPeriodically(void *userData);
+    static BaseApplicationService::KeyType translateKey(LPARAM lparam) noexcept;
+    static Vector2SI32 devicePixelScreenPosition(HWND hwnd, const Vector2SI32 &value) noexcept;
+    static int cursorModifiers() noexcept;
+    static int convertCursorType(UINT msg, WPARAM wparam) noexcept;
     static void handleAddingWatchEffectSource(void *userData, nanoem_u16_t handle, const URI &fileURI);
     static void handleRemovingWatchEffectSource(void *userData, uint16_t handle, const char *name);
 
-    Vector2SI32 deviceScaleScreenPosition(const NSEvent *event) noexcept;
-    float invertedDevicePixelRatio() const noexcept;
+    void handleInitializeEvent();
+    void handleDestroyEvent();
+    void handleTerminateEvent();
+    bool handleWindowCreate(HWND hwnd, Error &error);
+    void handleWindowResize(HWND hwnd, WPARAM type);
+    void handleWindowPositionChange(HWND hwnd);
+    void handleWindowConstraint(HWND hwnd, LPMINMAXINFO info);
+    void handleWindowDropFile(HWND hwnd, HDROP drop);
+    void handleWindowClose(HWND hwnd);
+    void handleWindowDestroy(HWND hwnd);
+    void handleMouseDown(HWND hwnd, const Vector2SI32 &coord, int type);
+    void handleMouseMove(HWND hwnd, const Vector2SI32 &coord, int type);
+    void handleMouseUp(HWND hwnd, const Vector2SI32 &coord, int type);
+    void handleMouseWheel(HWND hwnd, const Vector2SI32 &delta);
+    void handleMenuItem(HWND hwnd, ApplicationMenuBuilder::MenuItemType menuType);
 
-    void initializeMetal(id<MTLDevice> device, sg_pixel_format &pixelFormat);
-    void initializeOpenGL();
-    void getWindowCenterPoint(Vector2SI32 *value);
-    bool getLogicalCursorPosition(const NSEvent *event, Vector2SI32 &position, Vector2SI32 &delta);
-    void recenterCursorPosition();
-    Vector2 logicalCursorLocationInWindow(const NSEvent *event) const;
-    Vector2 lastLogicalCursorPosition() const;
+    nanoem_f32_t invertedDevicePixelRatio() const noexcept;
+    void newProject();
+    void openProject();
+    void saveProject();
+    void saveProjectAs();
+    void loadFile(const Dialog &dialog, IFileManager::DialogType type);
+    void loadFile(const URI &fileURI, IFileManager::DialogType type);
+    void saveFile(const Dialog &dialog, IFileManager::DialogType type);
+    void saveFile(const URI &fileURI, IFileManager::DialogType type);
+    void exportImage();
+    void exportVideo();
+
+    bool setupDirectXRenderer(HWND windowHandle, int width, int height, bool &isLowPower, Error &error);
+    bool setupOpenGLRenderer(HWND windowHandle, Error &error);
+    void destroyRenderer();
+    void destroyWindow();
+    void registerAllPrerequisiteEventListeners();
+    bool openProgressDialog(IProgressDialog *&dialog);
+    void closeProgressDialog();
+
+    Vector2SI32 virtualLogicalCursorPosition(const Vector2SI32 &value) const;
+    Vector2SI32 lastLogicalCursorPosition() const;
+    bool isCursorHidden() const;
     void setLastLogicalCursorPosition(const Vector2SI32 &value);
     void setLastLogicalCursorPosition(const Vector2SI32 &value, const Vector2SI32 &delta);
+    void getWindowCenterPoint(LPPOINT devicePoint) const;
+    void setCursorPosition(POINT devicePoint);
+    void centerCursor(LPPOINT devicePoint);
+    void updateClipCursorRect();
+    void lockCursor(LPPOINT devicePoint);
     void disableCursor(const Vector2SI32 &logicalCursorPosition);
+    void unlockCursor(const Vector2SI32 &logicalCursorPosition);
     void enableCursor(const Vector2SI32 &logicalCursorPosition);
-    void internalDisableCursor(Vector2SI32 &centerLocation);
-    void internalEnableCursor(const Vector2SI32 &logicalCursorPocation);
-    void registerAllPrerequisiteEventListeners();
+    void setFocus();
+    void killFocus();
+    void recenterCursor();
+    void updateDisplayFrequency();
+    void resizeWindow();
+    void resizeWindow(const Vector2UI32 &logicalWindowSize);
+    void updatePreferredFPS(const POWERBROADCAST_SETTING *settings);
+    void enablePowerSaving(bool value);
     bool isEditingDisplaySyncEnabled() const noexcept;
-    void updateDisplayFrequency(CGDirectDisplayID displayId);
-    void updatePreferredFPS();
-    void updateProgressDialog(uint32_t value, uint32_t total, uint32_t type, const char *text);
-    void sendUnicodeStringInput(NSString *characters);
-    void sendPerformanceMonitorPeriodically();
-    void sendDestroyMessage();
-    void resetWatchEffectSource();
-    void destroyWatchEffectSource();
-    void resizeDrawableSize();
 
-    const ITranslator *m_translator;
+    URIList cachedAggregateAllPlugins();
+    const char *localizedString(const char *text) const;
+    const wchar_t *localizedWideString(const char *text) const;
+    void loadProjectFromFile(const wchar_t *source);
+    void destroyAllWatchEffectSources();
+
+    using TranslatedMessageCache = tinystl::unordered_map<const char *, MutableWideString, TinySTLAllocator>;
+    mutable TranslatedMessageCache m_localizedMessageCache;
+    const Preference *m_preference;
     const bx::CommandLine *m_commandLine;
-    macos::CocoaThreadedApplicationService *m_service = nullptr;
+    Win32ThreadedApplicationService *m_service = nullptr;
+    Win32ApplicationMenuBuilder *m_menuBuilder = nullptr;
     ThreadedApplicationClient *m_client = nullptr;
-    NSWindow *m_nativeWindow = nil;
-    NSTextInputContext *m_textInputContext = nil;
-    tinystl::pair<NSAlert *, int> m_progressWindow = tinystl::make_pair(static_cast<NSAlert *>(nil), 0);
-    NSMutableAttributedString *m_markedString = nil;
-    NSRange m_selectedRange = NSMakeRange(NSNotFound, 0);
-    IOPMAssertionID m_displayKey = 0;
-    IOPMAssertionID m_idleKey = 0;
-    Preference *m_preference = nullptr;
-    FSEventStreamRef m_watchEffectSourceStream = nullptr;
-    dispatch_queue_t m_lazyExecutionQueue = nullptr;
-    dispatch_queue_t m_metricsQueue = nullptr;
-    dispatch_semaphore_t m_metricsSemaphore = nullptr;
-    void *m_logger = nullptr;
+    HWND m_windowHandle = nullptr;
+    HMENU m_menuHandle = nullptr;
+    HANDLE m_metricThreadHandle = nullptr;
+    HANDLE m_processHandle = nullptr;
     void *m_sentryDllHandle = nullptr;
-    CocoaApplicationMenuBuilder m_menu;
-    FileHandleMap m_watchEffectSourceHandles;
-    Vector2SI32 m_lastLogicalCursorPosition = Vector2SI32(0);
-    Vector2SI32 m_virtualLogicalCursorPosition = Vector2SI32(0);
-    Vector2SI32 m_restoreHiddenLogicalCursorPosition = Vector2SI32(0);
+    void *m_context = nullptr;
+    void *m_device = nullptr;
+    DXGI_SWAP_CHAIN_DESC m_swapChainDesc;
+    IDXGISwapChain *m_swapChain = nullptr;
+    ID3D12Device *m_device12 = nullptr;
+    ID3D12CommandQueue *m_commandQueue = nullptr;
+    tinystl::pair<IProgressDialog *, int> m_progressDialog =
+        tinystl::make_pair(static_cast<IProgressDialog *>(nullptr), 0);
+    HACCEL m_accelerators = nullptr;
+    RECT m_lastWindowRect;
+    URIList m_cachedPluginURIs;
+    FileHandleListMap m_watchEffectSourceHandles;
+    Vector2SI32 m_lastLogicalCursorPosition;
+    Vector2SI32 m_virtualLogicalCursorPosition;
+    Vector2SI32 m_restoreHiddenLogicalCursorPosition;
     DisabledCursorState m_disabledCursorState = kDisabledCursorStateNone;
-    uint64_t m_quitAt = 0;
+    FPSThresholder m_playingThresholder;
+    FPSThresholder m_editingThresholder;
+    Vector2UI32 m_logicalWindowSize;
+    nanoem_f32_t m_devicePixelRatio = 1.0f;
     uint32_t m_displayFrequency = 0;
-    std::atomic<bool> m_runningMetrics;
-    bool m_runningWindow = true;
-    bool m_vsyncAtPlaying = true;
     bool m_disabledCursorResigned = false;
+    bool m_vsyncAtPlaying = true;
+    bool m_initialized = false;
+    bool m_isFullScreen = false;
+    bool m_renderable = true;
+    volatile bool m_running = true;
 };
 
-} /* namespace macos */
+} /* namespace win32 */
 } /* namespace nanoem */
+
+#endif /* NANOEM_EMAPP_WIN32_MAINWINDOW_H_ */

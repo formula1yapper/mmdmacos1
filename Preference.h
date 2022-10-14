@@ -4,41 +4,70 @@
    This file is part of emapp component and it's licensed under Mozilla Public License. see LICENSE.md for more details.
  */
 
-#import <Foundation/Foundation.h>
+#pragma once
+#ifndef NANOEM_EMAPP_WIN32_PREFERENCE_H_
+#define NANOEM_EMAPP_WIN32_PREFERENCE_H_
+
+#include "emapp/Forward.h"
 
 #include "emapp/ApplicationPreference.h"
-
 #include "nanoem/ext/parson/parson.h"
+
+#include <wincrypt.h>
+
+struct ini_t;
 
 namespace nanoem {
 
 class ThreadedApplicationService;
 
-namespace macos {
+namespace win32 {
 
-class Preference : public nanoem::NonCopyable {
+class Preference final {
 public:
-    static bool isMetalAvailable();
-
-    Preference(NSUserDefaults *defaults, nanoem::ThreadedApplicationService *service, JSON_Value *config);
+    Preference(ThreadedApplicationService *service, JSON_Value *config);
     ~Preference();
 
-    const ApplicationPreference *applicationPreference() const;
-    ApplicationPreference *mutableApplicationPreference();
-    NSString *clientUUID() const;
-    uint32_t vendorId() const;
-    uint32_t deviceId() const;
+    void synchronize();
+    void load();
+    void save();
+
+    const ApplicationPreference *applicationPreference() const noexcept;
+    const char *uuidConstString() const noexcept;
+    uint32_t vendorId() const noexcept;
+    uint32_t deviceId() const noexcept;
+    uint32_t preferredEditingFPS() const noexcept;
 
 private:
-    void load();
+    struct RandomGenerator {
+        RandomGenerator();
+        ~RandomGenerator();
+        uint32_t gen();
+        HCRYPTPROV m_crypt = 0;
+    };
 
+    void fillLoadedParameters();
+    void getEffectPluginPath();
+    void remove(int sectionIndex, const char *key);
+    bool get(int sectionIndex, const char *key, bool def);
+    const char *get(int sectionIndex, const char *key, const char *def);
+    uint32_t get(int sectionIndex, const char *key, uint32_t value);
+    void set(int sectionIndex, const char *key, const char *value);
+    void set(int sectionIndex, const char *key, uint32_t value);
+    void set(int sectionIndex, const char *key, bool value);
+
+    ThreadedApplicationService *m_service;
+    JSON_Value *m_config;
     ApplicationPreference m_preference;
-    NSUserDefaults *m_defaults = nil;
-    NSString *m_clientUUID = nil;
-    JSON_Value *m_config = nullptr;
+    String m_renderer;
     uint32_t m_vendorId = 0;
     uint32_t m_deviceId = 0;
+    uint32_t m_preferredEditingFPS = 0;
+    String m_uuid;
+    ini_t *m_ini = nullptr;
 };
 
-} /* namespace macos */
+} /* namespace win32 */
 } /* namespace nanoem */
+
+#endif /* NANOEM_EMAPP_WIN32_PREFERENCE_H_ */
