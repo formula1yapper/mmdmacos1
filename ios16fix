@@ -1,0 +1,8 @@
+# Imports
+import re 
+import random
+from random import randint
+# Voids
+void ios11
+void ios12
+void ios13
